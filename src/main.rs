@@ -1,6 +1,6 @@
-use std::io::Read;
-
 use clap::Parser;
+use reqwest::Error;
+use serde::Deserialize;
 
 #[derive(Parser)]
 struct Args {
@@ -13,7 +13,14 @@ struct Args {
     project_count: u32,
 }
 
-fn main() {
+#[derive(Deserialize, Debug)]
+struct RepoInfo {
+    full_name: String,
+    contributors_url: String,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
     let args = Args::parse();
     let language = args.language;
     let project_count = args.project_count;
@@ -25,27 +32,33 @@ fn main() {
     );
     println!("Request URI: {}", req_url);
 
-    let client = reqwest::blocking::Client::new();
-    let mut res = client
+    let client = reqwest::Client::new();
+    let res = client
         .get(req_url)
-        .header("Accept", "application/vnd.github.v3+json")
-        // .header("User-Agent", "styczen")
+        // .header("Accept", "application/vnd.github.v3+json")
+        .header("User-Agent", "styczen")
         // .header(
         //     "Authorization",
-        //     "token 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",
+        //     "Basic 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",
         // )
-        .bearer_auth("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")
+        // .bearer_auth("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")
         .send()
-        .unwrap();
+        .await?;
 
-    // let mut res = reqwest::blocking::get(req_uri).unwrap();
-    let mut body = String::new();
-    res.read_to_string(&mut body).unwrap();
+    // let content = res.text().await?;
+    // println!("{}", content);
 
-    // let links = res.headers().get(reqwest::header::LINK).unwrap();
+    let r: Vec<RepoInfo> = res.json().await?;
+    println!("{:#?}", r);
 
-    println!("Status: {}", res.status());
-    println!("Headers: {:#?}", res.headers());
+    // res.read_to_string(&mut body).unwrap();
+
+    // // let links = res.headers().get(reqwest::header::LINK).unwrap();
+
+    // println!("Status: {}", res.status());
+    // println!("Headers: {:#?}", res.headers());
     // println!("Body: {}", body);
     // println!("Links: {:#?}", links);
+
+    Ok(())
 }
