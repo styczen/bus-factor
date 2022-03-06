@@ -19,37 +19,64 @@ struct RepoInfo {
     contributors_url: String,
 }
 
+#[derive(Deserialize, Debug)]
+struct ReposResponse {
+    items: Vec<RepoInfo>,
+}
+
+fn get_next_link(links: &str) -> Option<&str> {
+    let next_line = links
+        .split(',')
+        .find(|line| match line.find(r#"rel="next""#) {
+            Some(_) => true,
+            None => false,
+        })?;
+    let addr_start = next_line.find('<')?;
+    let addr_end = next_line.find('>')?;
+    next_line.get(addr_start + 1..addr_end)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    // Parse command line arguments
     let args = Args::parse();
     let language = args.language;
     let project_count = args.project_count;
 
     // Prepare URL for first request
-    let req_url = format!(
-        "https://api.github.com/search/repositories?q=language:{}&sort=stars&order=desc",
-        language
-    );
+    let req_url = "https://api.github.com/search/repositories";
     println!("Request URI: {}", req_url);
 
+    // Get response from the server
     let client = reqwest::Client::new();
     let res = client
         .get(req_url)
-        // .header("Accept", "application/vnd.github.v3+json")
+        .query(&[
+            ("q", format!("language:{}", language)),
+            ("sort", "stars".to_string()),
+            ("order", "desc".to_string()),
+            // ("page", 34.to_string()),
+        ])
+        .header("Accept", "application/vnd.github.v3+json")
         .header("User-Agent", "styczen")
-        // .header(
-        //     "Authorization",
-        //     "Basic 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",
-        // )
-        // .bearer_auth("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")
         .send()
         .await?;
 
-    // let content = res.text().await?;
-    // println!("{}", content);
+    // Get "next" link from the headers by parsing lines separated by comma
+    let headers = res.headers();
+    let links = headers.get("link").unwrap();
+    let links = links.to_str().unwrap();
+    println!("Links:\n{:#?}", links);
 
-    let r: Vec<RepoInfo> = res.json().await?;
-    println!("{:#?}", r);
+    let next_link = get_next_link(links);
+    match next_link {
+        Some(link) => println!("Next link: {}", link),
+        None => println!("There is no more \"next\" link"),
+    }
+    let r: ReposResponse = res.json().await?;
+    // println!("JSON:\n{:#?}", r.items);
+
+    // let links = res.headers().get("Link").unwrap();
 
     // res.read_to_string(&mut body).unwrap();
 
@@ -61,4 +88,37 @@ async fn main() -> Result<(), Error> {
     // println!("Links: {:#?}", links);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::*;
+
+    #[test]
+    fn links_with_valid_next() {
+        let links = "<https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=2>; rel=\"next\", 
+                          <https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=34>; rel=\"last\"";
+        assert_eq!(get_next_link(links), Some("https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=2"));
+    }
+
+    #[test]
+    fn links_empty_links() {
+        assert_eq!(get_next_link(""), None);
+    }
+
+    #[test]
+    fn links_all_rel_links() {
+        let links = "<https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=1>; rel=\"prev\", 
+                          <https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=3>; rel=\"next\", 
+                          <https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=34>; rel=\"last\", 
+                          <https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=1>; rel=\"first\"";
+        assert_eq!(get_next_link(links), Some("https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=3"));
+    }
+
+    #[test]
+    fn links_no_next_link() {
+        let links = "<https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=33>; rel=\"prev\", 
+                          <https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=1>; rel=\"first\"";
+        assert_eq!(get_next_link(links), None);
+    }
 }
