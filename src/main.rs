@@ -1,26 +1,26 @@
-use clap::Parser;
-use reqwest::Error;
+use reqwest::{Error, header::HeaderMap};
 use serde::Deserialize;
 use url::Url;
+use clap::Parser;
 
 #[derive(Parser)]
-struct Args {
-    /// The programming language of GitHub repositories
+pub struct ProgramOptions {
+    /// Name of the programming language of GitHub repositories
     #[clap(long = "language")]
-    language: String,
+    pub language: String,
 
     /// The amount of projects to be read from GitHub
     #[clap(long = "project_count")]
-    project_count: u32,
+    pub project_count: usize,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug)]
 struct RepoInfo {
     full_name: String,
     contributors_url: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug)]
 struct ReposResponse {
     items: Vec<RepoInfo>,
 }
@@ -40,59 +40,75 @@ fn get_next_link(links: &str) -> Option<Url> {
     }
 }
 
+fn extract_links_from_header_map(headers: &HeaderMap) -> Option<&str> {
+    let links = headers.get("link")?;
+    match links.to_str() {
+        Ok(link) => Some(link),
+        Err(_) => None,
+    }
+}
+
+fn get_contributors(client: &reqwest::Client) {
+    
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     // Parse command line arguments
-    let args = Args::parse();
+    let args = ProgramOptions::parse();
     let language = args.language;
     let project_count = args.project_count;
 
-    // Prepare URL for first request
-    // let req_url = "https://api.github.com/search/repositories";
-    let req_url: Url = "https://api.github.com/search/repositories"
-        .parse()
-        .unwrap();
-    println!("Request URI: {}", req_url);
-
-    // Get response from the server
     let client = reqwest::Client::new();
-    let res = client
-        .get(req_url.to_string())
-        .query(&[
-            ("q", format!("language:{}", language)),
-            ("sort", "stars".to_string()),
-            ("order", "desc".to_string()),
-            // ("page", 34.to_string()),
-        ])
-        .header("Accept", "application/vnd.github.v3+json")
-        .header("User-Agent", "styczen")
-        .send()
-        .await?;
 
-    // Get "next" link from the headers by parsing lines separated by comma
-    let headers = res.headers();
-    let links = headers.get("link").unwrap();
-    let links = links.to_str().unwrap();
-    println!("Links:\n{:#?}", links);
+    let mut loaded_projects_cnt: usize = 0;
+    let mut req_url: Url = "https://api.github.com/search/repositories".parse().unwrap();
+    while loaded_projects_cnt <= project_count {
+        // Prepare URL for first request
+        println!("Request URI: {}", req_url);
 
-    let next_link = get_next_link(links);
-    match next_link {
-        Some(link) => println!("Next link: {}", link),
-        None => println!("There is no more \"next\" link"),
+        // Get response from the server
+        let res = client
+            .get(req_url.to_string())
+            .query(&[
+                ("q", format!("language:{}", language)),
+                ("sort", "stars".to_string()),
+                ("order", "desc".to_string()),
+                // ("per_page", 250.to_string()),
+            ])
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "styczen")
+            .send()
+            .await?;
+
+        // Get "next" link from the headers by parsing lines separated by comma
+        let headers = res.headers();
+        let links = extract_links_from_header_map(headers).unwrap();
+        // println!("Links:\n{:#?}", links);
+        
+        let next_link = get_next_link(links);
+        
+        let mut r: ReposResponse = res.json().await?;
+        println!("Len: {:#?}", r.items.len());
+        
+        for item in r.items {
+            let url_res = client
+            .get(item.contributors_url)
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "styczen")
+            .send()
+            .await?;
+
+        }
+        // Check next link and break loop if there is no more "next" link
+        match next_link {
+            Some(link) => req_url = link,
+            None => {
+                println!("There is no more \"next\" link");
+                break;
+            }
+        }
     }
-    let r: ReposResponse = res.json().await?;
-    // println!("JSON:\n{:#?}", r.items);
-
-    // let links = res.headers().get("Link").unwrap();
-
-    // res.read_to_string(&mut body).unwrap();
-
-    // // let links = res.headers().get(reqwest::header::LINK).unwrap();
-
-    // println!("Status: {}", res.status());
-    // println!("Headers: {:#?}", res.headers());
-    // println!("Body: {}", body);
-    // println!("Links: {:#?}", links);
 
     Ok(())
 }
