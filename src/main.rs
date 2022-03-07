@@ -1,6 +1,7 @@
 use clap::Parser;
 use reqwest::Error;
 use serde::Deserialize;
+use url::Url;
 
 #[derive(Parser)]
 struct Args {
@@ -24,7 +25,7 @@ struct ReposResponse {
     items: Vec<RepoInfo>,
 }
 
-fn get_next_link(links: &str) -> Option<&str> {
+fn get_next_link(links: &str) -> Option<Url> {
     let next_line = links
         .split(',')
         .find(|line| match line.find(r#"rel="next""#) {
@@ -33,7 +34,10 @@ fn get_next_link(links: &str) -> Option<&str> {
         })?;
     let addr_start = next_line.find('<')?;
     let addr_end = next_line.find('>')?;
-    next_line.get(addr_start + 1..addr_end)
+    match Url::parse(next_line.get(addr_start + 1..addr_end)?) {
+        Ok(url) => Some(url),
+        Err(_) => None,
+    }
 }
 
 #[tokio::main]
@@ -44,13 +48,16 @@ async fn main() -> Result<(), Error> {
     let project_count = args.project_count;
 
     // Prepare URL for first request
-    let req_url = "https://api.github.com/search/repositories";
+    // let req_url = "https://api.github.com/search/repositories";
+    let req_url: Url = "https://api.github.com/search/repositories"
+        .parse()
+        .unwrap();
     println!("Request URI: {}", req_url);
 
     // Get response from the server
     let client = reqwest::Client::new();
     let res = client
-        .get(req_url)
+        .get(req_url.to_string())
         .query(&[
             ("q", format!("language:{}", language)),
             ("sort", "stars".to_string()),
@@ -98,7 +105,8 @@ mod tests {
     fn links_with_valid_next() {
         let links = "<https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=2>; rel=\"next\", 
                           <https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=34>; rel=\"last\"";
-        assert_eq!(get_next_link(links), Some("https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=2"));
+        assert_eq!(get_next_link(links), 
+                   Some(Url::parse("https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=2").unwrap()));
     }
 
     #[test]
@@ -112,13 +120,20 @@ mod tests {
                           <https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=3>; rel=\"next\", 
                           <https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=34>; rel=\"last\", 
                           <https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=1>; rel=\"first\"";
-        assert_eq!(get_next_link(links), Some("https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=3"));
+        assert_eq!(get_next_link(links), Some(Url::parse("https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=3").unwrap()));
     }
 
     #[test]
     fn links_no_next_link() {
         let links = "<https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=33>; rel=\"prev\", 
                           <https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=1>; rel=\"first\"";
+        assert_eq!(get_next_link(links), None);
+    }
+
+    #[test]
+    fn links_empty_url() {
+        let links = "<>; rel=\"next\", 
+                          <https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=34>; rel=\"last\"";
         assert_eq!(get_next_link(links), None);
     }
 }
