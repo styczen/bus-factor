@@ -1,7 +1,7 @@
-use reqwest::{Error, header::{HeaderMap, HeaderValue}};
+use clap::Parser;
+use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Deserialize;
 use url::Url;
-use clap::Parser;
 
 #[derive(Parser)]
 pub struct ProgramOptions {
@@ -14,15 +14,21 @@ pub struct ProgramOptions {
     pub project_count: usize,
 }
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 struct RepoInfo {
     full_name: String,
     contributors_url: String,
 }
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Deserialize)]
 struct ReposResponse {
     items: Vec<RepoInfo>,
+}
+
+#[derive(Deserialize)]
+struct Contributor {
+    login: String,
+    contributions: usize,
 }
 
 fn get_next_link(links: &str) -> Option<Url> {
@@ -40,75 +46,67 @@ fn get_next_link(links: &str) -> Option<Url> {
     }
 }
 
-fn extract_links_from_header_map(headers: &HeaderMap) -> Option<&str> {
-    let links = headers.get("link")?;
-    match links.to_str() {
-        Ok(link) => Some(link),
-        Err(_) => None,
-    }
+fn extract_links_from_header_map(headers: &HeaderMap) -> Result<&str, Box<dyn std::error::Error>> {
+    Ok(headers
+        .get("link")
+        .ok_or(r#"no "link" key in headers"#.to_string())?
+        .to_str()?)
 }
 
-fn get_contributors(client: &reqwest::Client) {
-    
-}
+// fn get_contributors(client: &reqwest::Client) {
+// for item in r.items {
+//     println!("{}", item.contributors_url);
+//     // let url_res = client
+//     //     .get(item.contributors_url)
+//     //     .send()
+//     //     .await?;
 
-async fn search_top_star_repos(client: &reqwest::Client, url: &Url) -> Result<Vec<RepoInfo>, Error> {
+//     // break;
+//     // url_res
+// }
+// break;
+// }
 
-}
+async fn search_top_star_repos(
+    client: &reqwest::Client,
+    language: &str,
+    project_count: usize,
+) -> Result<Vec<RepoInfo>, Box<dyn std::error::Error>> {
+    let mut req_url: Url = format!(
+        "https://api.github.com/search/repositories?q=language:{}&sort=stars&order=desc",
+        language
+    )
+    .parse()
+    .unwrap();
 
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    // Parse command line arguments
-    let args = ProgramOptions::parse();
-    let language = args.language;
-    let project_count = args.project_count;
-
-    let mut headers = HeaderMap::new();
-    headers.insert("Accept", HeaderValue::from_static("application/vnd.github.v3+json"));
-    let client = reqwest::Client::builder()
-        .user_agent("styczen") // This has to be removed and changed to token
-        .default_headers(headers)
-        .build()?;
-
-    let mut loaded_projects_cnt: usize = 0;
-    let mut req_url: Url = "https://api.github.com/search/repositories".parse().unwrap();
-    while loaded_projects_cnt <= project_count {
-        // Prepare URL for first request
+    let mut loaded_projects: Vec<RepoInfo> = Vec::new();
+    while loaded_projects.len() < project_count {
         println!("Request URI: {}", req_url);
 
         // Get response from the server
-        let res = client
-            .get(req_url.to_string())
-            .query(&[
-                ("q", format!("language:{}", language)),
-                ("sort", "stars".to_string()),
-                ("order", "desc".to_string()),
-                // ("per_page", 250.to_string()),
-            ])
-            // .header("Accept", "application/vnd.github.v3+json")
-            // .header("User-Agent", "styczen")
-            .send()
-            .await?;
+        let res = client.get(req_url.to_string()).send().await?;
 
         // Get "next" link from the headers by parsing lines separated by comma
         let headers = res.headers();
-        let links = extract_links_from_header_map(headers).unwrap();
-        // println!("Links:\n{:#?}", links);
-        
-        let next_link = get_next_link(links);
-        
-        let mut r: ReposResponse = res.json().await?;
-        println!("Len: {:#?}", r.items.len());
-        
-        for item in r.items {
-            let url_res = client
-            .get(item.contributors_url)
-            // .header("Accept", "application/vnd.github.v3+json")
-            // .header("User-Agent", "styczen")
-            .send()
-            .await?;
+        let links = extract_links_from_header_map(headers)?;
 
+        // Getting "next" link here to avoid borrow move error
+        let next_link = get_next_link(links);
+
+        let r: ReposResponse = res.json().await?;
+        println!("Response items Len: {:#?}", r.items.len());
+
+        // Check whether extending by all of new repositories increases
+        // length of repos vector above set project_count
+        if loaded_projects.len() + r.items.len() > project_count {
+            let nr_elements_to_take = project_count - loaded_projects.len();
+            for i in 0..nr_elements_to_take {
+                loaded_projects.push(r.items[i].clone());
+            }
+        } else {
+            loaded_projects.extend(r.items);
         }
+
         // Check next link and break loop if there is no more "next" link
         match next_link {
             Some(link) => req_url = link,
@@ -118,6 +116,32 @@ async fn main() -> Result<(), Error> {
             }
         }
     }
+
+    Ok(loaded_projects)
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Parse command line arguments
+    let args = ProgramOptions::parse();
+    let language = args.language;
+    let project_count = args.project_count;
+
+    // Initialize HTTP client
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "Accept",
+        HeaderValue::from_static("application/vnd.github.v3+json"),
+    );
+    let client = reqwest::Client::builder()
+        .user_agent("styczen") // TODO: This has to be removed and changed to token
+        .default_headers(headers)
+        .build()?;
+
+    let loaded_projects = search_top_star_repos(&client, &language, project_count).await?;
+    println!("Repos len: {}", loaded_projects.len());
+
+    println!("{:#?}", loaded_projects);
 
     Ok(())
 }
@@ -130,7 +154,7 @@ mod tests {
     fn links_with_valid_next() {
         let links = "<https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=2>; rel=\"next\", 
                           <https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=34>; rel=\"last\"";
-        assert_eq!(get_next_link(links), 
+        assert_eq!(get_next_link(links),
                    Some(Url::parse("https://api.github.com/search/repositories?q=language%3Arust&sort=stars&order=desc&page=2").unwrap()));
     }
 
