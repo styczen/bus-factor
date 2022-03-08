@@ -1,4 +1,4 @@
-use reqwest::{Error, header::HeaderMap};
+use reqwest::{Error, header::{HeaderMap, HeaderValue}};
 use serde::Deserialize;
 use url::Url;
 use clap::Parser;
@@ -52,6 +52,10 @@ fn get_contributors(client: &reqwest::Client) {
     
 }
 
+async fn search_top_star_repos(client: &reqwest::Client, url: &Url) -> Result<Vec<RepoInfo>, Error> {
+
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     // Parse command line arguments
@@ -59,7 +63,12 @@ async fn main() -> Result<(), Error> {
     let language = args.language;
     let project_count = args.project_count;
 
-    let client = reqwest::Client::new();
+    let mut headers = HeaderMap::new();
+    headers.insert("Accept", HeaderValue::from_static("application/vnd.github.v3+json"));
+    let client = reqwest::Client::builder()
+        .user_agent("styczen") // This has to be removed and changed to token
+        .default_headers(headers)
+        .build()?;
 
     let mut loaded_projects_cnt: usize = 0;
     let mut req_url: Url = "https://api.github.com/search/repositories".parse().unwrap();
@@ -76,8 +85,8 @@ async fn main() -> Result<(), Error> {
                 ("order", "desc".to_string()),
                 // ("per_page", 250.to_string()),
             ])
-            .header("Accept", "application/vnd.github.v3+json")
-            .header("User-Agent", "styczen")
+            // .header("Accept", "application/vnd.github.v3+json")
+            // .header("User-Agent", "styczen")
             .send()
             .await?;
 
@@ -94,8 +103,8 @@ async fn main() -> Result<(), Error> {
         for item in r.items {
             let url_res = client
             .get(item.contributors_url)
-            .header("Accept", "application/vnd.github.v3+json")
-            .header("User-Agent", "styczen")
+            // .header("Accept", "application/vnd.github.v3+json")
+            // .header("User-Agent", "styczen")
             .send()
             .await?;
 
