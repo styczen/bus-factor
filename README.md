@@ -7,7 +7,7 @@ equal to **1**. User of this CLI app gives programming language and number
 of repositories to fetch. Those repositories should be sorted by amount of stars.
 Then all of those repositories' information should be further analyze...
 
-## What it means **bus factor** equal to **1**?
+## What does a **bus factor** of **1** mean?
 Most active developer's contributions account for **75% or more**
 of total contributions count from the top 25 most active developers.
 
