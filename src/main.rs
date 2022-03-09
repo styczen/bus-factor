@@ -26,7 +26,7 @@ struct ReposResponse {
     items: Vec<RepoInfo>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct Contributor {
     login: String,
     contributions: usize,
@@ -58,19 +58,17 @@ fn extract_links_from_header_map(headers: &HeaderMap) -> Result<&str, Box<dyn st
 async fn get_contributors(
     client: &reqwest::Client,
     repo: &RepoInfo,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("{}", repo.contributors_url);
+) -> Result<Vec<Contributor>, Box<dyn std::error::Error>> {
+    println!("contributors_url: {}", repo.contributors_url);
     let url = Url::parse(&repo.contributors_url)?;
     let url_res = client.get(url).send().await?;
     // if url_res.status() != http::StatusCode::OK {
     //     return Err();
     // }
 
-    // let contributors: Vec<Contributor> = 1
-    // break;
-    // url_res
+    let contributors: Vec<Contributor> = url_res.json().await?;
 
-    Ok(())
+    Ok(contributors)
 }
 
 async fn search_top_star_repos(
@@ -147,8 +145,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let loaded_projects = search_top_star_repos(&client, &language, project_count).await?;
     println!("Repos len: {}", loaded_projects.len());
 
-    for ele in loaded_projects {
-        println!("Repo: {:#?}", ele);
+    for repo in loaded_projects {
+        println!("Repo: {:#?}", repo);
+        let contributors = get_contributors(&client, &repo).await?;
+        println!("contributors: {:#?}", contributors);
     }
 
     Ok(())
