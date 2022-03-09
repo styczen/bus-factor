@@ -1,8 +1,9 @@
 use clap::Parser;
+use futures::future::join_all;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Deserialize;
+use std::env;
 use url::Url;
-use futures::future::join_all;
 
 const AMOUNT_OF_CONTRIBUTORS: usize = 25;
 const BUS_FACTOR_THRESHOLD: f32 = 0.75;
@@ -62,13 +63,21 @@ fn extract_links_from_header_map(headers: &HeaderMap) -> Result<&str, Box<dyn st
 async fn get_contributors(
     client: &reqwest::Client,
     repo: &RepoInfo,
-    amount: usize
+    amount: usize,
 ) -> Result<Vec<Contributor>, Box<dyn std::error::Error>> {
     let url = Url::parse(&format!("{}?per_page={}", repo.contributors_url, amount))?;
-    // println!("contributors_url: {}", url);
+    println!("contributors_url: {}", url);
     let url_res = client.get(url).send().await?;
     let contributors: Vec<Contributor> = url_res.json().await?;
     Ok(contributors)
+
+    // let url_res = client.get(url).send().await;
+    // println!("url_res: {}", url_res.is_ok());
+    // let url_res = url_res?;
+    // let contributors: Vec<Contributor> = url_res.json().await;
+    // println!("contributors: {}", contributors.is_ok());
+    // let url_res = url_res?;
+    // Ok(contributors)
 }
 
 async fn search_top_star_repos(
@@ -85,8 +94,8 @@ async fn search_top_star_repos(
 
     let mut loaded_projects: Vec<RepoInfo> = Vec::new();
     while loaded_projects.len() < project_count {
-        // println!("Request URI: {}", req_url);
-
+        println!("Request URI: {}", req_url);
+        println!("{}, {}", loaded_projects.len(), project_count);
         // Get response from the server
         let res = client.get(req_url.to_string()).send().await?;
 
@@ -124,15 +133,24 @@ async fn search_top_star_repos(
     Ok(loaded_projects)
 }
 
-async fn get_bus_factor(language: &str, project_count: usize) -> Result<Vec<(Contributor, f32)>, Box<dyn std::error::Error>> {
+async fn get_bus_factor(
+    language: &str,
+    project_count: usize,
+) -> Result<Vec<(Contributor, f32)>, Box<dyn std::error::Error>> {
+    // Personal access token
+    // let personal_access_token = format!("token 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");
+    let personal_access_token = format!("token {}", env::var("GITHUB_ACCESS_TOKEN")?);
+    let authorization_header_key = HeaderValue::from_str(&personal_access_token)?;
+
     // Initialize HTTP client
     let mut headers = HeaderMap::new();
     headers.insert(
         "Accept",
         HeaderValue::from_static("application/vnd.github.v3+json"),
     );
+    headers.insert("authorization", authorization_header_key);
     let client = reqwest::Client::builder()
-        .user_agent("styczen") // TODO: This has to be removed and changed to token
+        // .user_agent("styczen") // TODO: This has to be removed and changed to token
         .default_headers(headers)
         .build()?;
 
@@ -143,35 +161,41 @@ async fn get_bus_factor(language: &str, project_count: usize) -> Result<Vec<(Con
     let contributors_per_repo = join_all(
         loaded_repos
             .iter()
-            .map(|repo| get_contributors(&client, repo, AMOUNT_OF_CONTRIBUTORS))
-        ).await;
+            .map(|repo| get_contributors(&client, repo, AMOUNT_OF_CONTRIBUTORS)),
+    )
+    .await;
 
     println!("contributors_per_repo len: {}", contributors_per_repo.len());
     // println!("contributors_per_repo: {:#?}", contributors_per_repo);
     println!("BUS_FACTOR_THRESHOLD: {}", BUS_FACTOR_THRESHOLD);
 
+    for (i, ele) in contributors_per_repo.iter().enumerate() {
+        println!("i: {}, ele len: {}", i, ele.is_ok());
+    }
+
     // Filter out repositories which bus factor is equal to 1
-    // and return tuple with most active contributor, 
-    // percentage of theirs contributions and name of the repo 
+    // and return tuple with most active contributor,
+    // percentage of theirs contributions and name of the repo
     let result: Vec<(Contributor, f32)> = contributors_per_repo
         .iter()
-        .filter_map(|contributors| {
-            match contributors {
-                Ok(contributors) => {
-                    let all_contributions = contributors
-                        .iter()
-                        .fold(0, |curr_sum, contributor| curr_sum + contributor.contributions);
-                    
-                    // println!("most active: {}, all: {}", contributors[0].contributions, all_contributions);
-                    let percentage = contributors[0].contributions as f32 / all_contributions as f32;
-                    if percentage >= BUS_FACTOR_THRESHOLD {
-                        return Some((contributors[0].clone(), percentage));
-                    }
+        .filter_map(|contributors| match contributors {
+            Ok(contributors) => {
+                let all_contributions = contributors.iter().fold(0, |curr_sum, contributor| {
+                    curr_sum + contributor.contributions
+                });
 
-                    None
-                },
-                Err(_) => None
+                println!(
+                    "most active: {}, all: {}",
+                    contributors[0].contributions, all_contributions
+                );
+                let percentage = contributors[0].contributions as f32 / all_contributions as f32;
+                if percentage >= BUS_FACTOR_THRESHOLD {
+                    return Some((contributors[0].clone(), percentage));
+                }
+
+                None
             }
+            Err(_) => None,
         })
         .collect();
 
@@ -189,9 +213,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let result = get_bus_factor(&language, project_count).await?;
 
-    println!("{}", result.len());
+    println!("get_bus_factor res len: {}", result.len());
     // Print result to console
-    result.iter().for_each(|r| println!("project: {:<20} user: {:<20} percentage: {}", "PROJECT", r.0.login, r.1));
+    result.iter().for_each(|r| {
+        println!(
+            "project: {:<20} user: {:<20} percentage: {:.2}",
+            "PROJECT", r.0.login, r.1
+        )
+    });
     Ok(())
 }
 
