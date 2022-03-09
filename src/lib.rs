@@ -1,41 +1,13 @@
-use clap::Parser;
+mod github_api;
+
 use futures::future::join_all;
+use github_api::{Contributor, RepoInfo, ReposResponse};
 use reqwest::header::{HeaderMap, HeaderValue};
-use serde::Deserialize;
 use std::env;
 use url::Url;
 
 const AMOUNT_OF_CONTRIBUTORS: usize = 25;
 const BUS_FACTOR_THRESHOLD: f32 = 0.75;
-
-#[derive(Parser)]
-pub struct ProgramOptions {
-    /// Name of the programming language of GitHub repositories
-    #[clap(long = "language")]
-    pub language: String,
-
-    /// The amount of projects to be read from GitHub
-    #[clap(long = "project_count")]
-    pub project_count: usize,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-struct RepoInfo {
-    name: String,
-    contributors_url: String,
-}
-
-#[derive(Deserialize)]
-struct ReposResponse {
-    items: Vec<RepoInfo>,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-struct Contributor {
-    login: String,
-    contributions: usize,
-    // repository_name: String,
-}
 
 fn get_next_link(links: &str) -> Option<Url> {
     let next_line = links
@@ -59,8 +31,12 @@ fn extract_links_from_header_map(headers: &HeaderMap) -> Result<&str, Box<dyn st
         .to_str()?)
 }
 
-// enum Error
-async fn get_contributors(
+/// Function responsible for fetching contributors information
+/// for specific repository.
+///
+/// This function panics when HTTP response has status code
+/// different than 200 (OK)
+pub async fn get_contributors(
     client: &reqwest::Client,
     repo: &RepoInfo,
     amount: usize,
@@ -82,7 +58,13 @@ async fn get_contributors(
     Ok(contributors)
 }
 
-async fn search_top_star_repos(
+/// Function which is responsible for fetching repositories with most stars
+/// in descending order. User specifies programming language and amount
+/// of repositories to fetch from GitHub API.
+///
+/// This function panics when HTTP response has status code
+/// different than 200 (OK)
+pub async fn search_top_star_repos(
     client: &reqwest::Client,
     language: &str,
     project_count: usize,
@@ -143,7 +125,10 @@ async fn search_top_star_repos(
     Ok(loaded_projects)
 }
 
-async fn get_bus_factor(
+/// Function responsible for fetching vector of repositories'
+/// most active contributor and percentage of contributions
+/// of the most active contributor.
+pub async fn get_bus_factor(
     language: &str,
     project_count: usize,
 ) -> Result<Vec<(String, Contributor, f32)>, Box<dyn std::error::Error>> {
@@ -200,25 +185,6 @@ async fn get_bus_factor(
         .collect();
 
     Ok(result)
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Parse command line arguments
-    let args = ProgramOptions::parse();
-    let language = args.language;
-    let project_count = args.project_count;
-
-    let result = get_bus_factor(&language, project_count).await?;
-
-    // Print result to console
-    result.iter().for_each(|r| {
-        println!(
-            "project: {:<30} user: {:<30} percentage: {:.2}",
-            r.0, r.1.login, r.2
-        )
-    });
-    Ok(())
 }
 
 #[cfg(test)]
