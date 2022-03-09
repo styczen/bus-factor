@@ -2,6 +2,7 @@ use clap::Parser;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Deserialize;
 use url::Url;
+// use http::StatusCode;
 
 #[derive(Parser)]
 pub struct ProgramOptions {
@@ -53,19 +54,24 @@ fn extract_links_from_header_map(headers: &HeaderMap) -> Result<&str, Box<dyn st
         .to_str()?)
 }
 
-// fn get_contributors(client: &reqwest::Client) {
-// for item in r.items {
-//     println!("{}", item.contributors_url);
-//     // let url_res = client
-//     //     .get(item.contributors_url)
-//     //     .send()
-//     //     .await?;
+// enum Error
+async fn get_contributors(
+    client: &reqwest::Client,
+    repo: &RepoInfo,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("{}", repo.contributors_url);
+    let url = Url::parse(&repo.contributors_url)?;
+    let url_res = client.get(url).send().await?;
+    // if url_res.status() != http::StatusCode::OK {
+    //     return Err();
+    // }
 
-//     // break;
-//     // url_res
-// }
-// break;
-// }
+    // let contributors: Vec<Contributor> = 1
+    // break;
+    // url_res
+
+    Ok(())
+}
 
 async fn search_top_star_repos(
     client: &reqwest::Client,
@@ -141,7 +147,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let loaded_projects = search_top_star_repos(&client, &language, project_count).await?;
     println!("Repos len: {}", loaded_projects.len());
 
-    println!("{:#?}", loaded_projects);
+    for ele in loaded_projects {
+        println!("Repo: {:#?}", ele);
+    }
 
     Ok(())
 }
