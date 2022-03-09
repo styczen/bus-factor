@@ -2,7 +2,10 @@ use clap::Parser;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Deserialize;
 use url::Url;
-// use http::StatusCode;
+use futures::future::join_all;
+
+const AMOUNT_OF_CONTRIBUTORS: usize = 25;
+const BUS_FACTOR_THRESHOLD: f32 = 0.75;
 
 #[derive(Parser)]
 pub struct ProgramOptions {
@@ -26,10 +29,11 @@ struct ReposResponse {
     items: Vec<RepoInfo>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct Contributor {
     login: String,
     contributions: usize,
+    // repository_name: String,
 }
 
 fn get_next_link(links: &str) -> Option<Url> {
@@ -58,16 +62,12 @@ fn extract_links_from_header_map(headers: &HeaderMap) -> Result<&str, Box<dyn st
 async fn get_contributors(
     client: &reqwest::Client,
     repo: &RepoInfo,
+    amount: usize
 ) -> Result<Vec<Contributor>, Box<dyn std::error::Error>> {
-    println!("contributors_url: {}", repo.contributors_url);
-    let url = Url::parse(&repo.contributors_url)?;
+    let url = Url::parse(&format!("{}?per_page={}", repo.contributors_url, amount))?;
+    // println!("contributors_url: {}", url);
     let url_res = client.get(url).send().await?;
-    // if url_res.status() != http::StatusCode::OK {
-    //     return Err();
-    // }
-
     let contributors: Vec<Contributor> = url_res.json().await?;
-
     Ok(contributors)
 }
 
@@ -85,7 +85,7 @@ async fn search_top_star_repos(
 
     let mut loaded_projects: Vec<RepoInfo> = Vec::new();
     while loaded_projects.len() < project_count {
-        println!("Request URI: {}", req_url);
+        // println!("Request URI: {}", req_url);
 
         // Get response from the server
         let res = client.get(req_url.to_string()).send().await?;
@@ -98,7 +98,7 @@ async fn search_top_star_repos(
         let next_link = get_next_link(links);
 
         let r: ReposResponse = res.json().await?;
-        println!("Response items Len: {:#?}", r.items.len());
+        // println!("Response items Len: {:#?}", r.items.len());
 
         // Check whether extending by all of new repositories increases
         // length of repos vector above set project_count
@@ -124,13 +124,7 @@ async fn search_top_star_repos(
     Ok(loaded_projects)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Parse command line arguments
-    let args = ProgramOptions::parse();
-    let language = args.language;
-    let project_count = args.project_count;
-
+async fn get_bus_factor(language: &str, project_count: usize) -> Result<Vec<(Contributor, f32)>, Box<dyn std::error::Error>> {
     // Initialize HTTP client
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -142,15 +136,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .default_headers(headers)
         .build()?;
 
-    let loaded_projects = search_top_star_repos(&client, &language, project_count).await?;
-    println!("Repos len: {}", loaded_projects.len());
+    let loaded_repos = search_top_star_repos(&client, &language, project_count).await?;
+    println!("loaded_repos len: {}", loaded_repos.len());
 
-    for repo in loaded_projects {
-        println!("Repo: {:#?}", repo);
-        let contributors = get_contributors(&client, &repo).await?;
-        println!("contributors: {:#?}", contributors);
-    }
+    // Fetch most active 25 contributors for loaded repositories
+    let contributors_per_repo = join_all(
+        loaded_repos
+            .iter()
+            .map(|repo| get_contributors(&client, repo, AMOUNT_OF_CONTRIBUTORS))
+        ).await;
 
+    println!("contributors_per_repo len: {}", contributors_per_repo.len());
+    // println!("contributors_per_repo: {:#?}", contributors_per_repo);
+    println!("BUS_FACTOR_THRESHOLD: {}", BUS_FACTOR_THRESHOLD);
+
+    // Filter out repositories which bus factor is equal to 1
+    // and return tuple with most active contributor, 
+    // percentage of theirs contributions and name of the repo 
+    let result: Vec<(Contributor, f32)> = contributors_per_repo
+        .iter()
+        .filter_map(|contributors| {
+            match contributors {
+                Ok(contributors) => {
+                    let all_contributions = contributors
+                        .iter()
+                        .fold(0, |curr_sum, contributor| curr_sum + contributor.contributions);
+                    
+                    // println!("most active: {}, all: {}", contributors[0].contributions, all_contributions);
+                    let percentage = contributors[0].contributions as f32 / all_contributions as f32;
+                    if percentage >= BUS_FACTOR_THRESHOLD {
+                        return Some((contributors[0].clone(), percentage));
+                    }
+
+                    None
+                },
+                Err(_) => None
+            }
+        })
+        .collect();
+
+    println!("result len: {}", result.len());
+
+    Ok(result)
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Parse command line arguments
+    let args = ProgramOptions::parse();
+    let language = args.language;
+    let project_count = args.project_count;
+
+    let result = get_bus_factor(&language, project_count).await?;
+
+    println!("{}", result.len());
+    // Print result to console
+    result.iter().for_each(|r| println!("project: {:<20} user: {:<20} percentage: {}", "PROJECT", r.0.login, r.1));
     Ok(())
 }
 
